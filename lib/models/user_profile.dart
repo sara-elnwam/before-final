@@ -87,6 +87,7 @@ class UserProfile extends GetxController {
     double? speechRate,
     double? volume,
     String? localeCode,
+
     String? shakeTwiceAction,
     String? tapThreeTimesAction,
     String? longPressAction,

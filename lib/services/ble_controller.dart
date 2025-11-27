@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'dart:convert'; // 💡 تم تصحيح الاستيراد إلى 'dart:convert'
+import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter_tts/flutter_tts.dart';
@@ -11,11 +11,25 @@ import 'package:speech_to_text/speech_to_text.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:get/get.dart';
-// 💡 تم إضافة هذه المكتبة للوصول لدالة firstWhereOrNull في القوائم
-import 'package:collection/collection.dart';
+import 'package:collection/collection.dart'; // يُستخدم لـ firstWhereOrNull
 
 import '../models/user_profile.dart';
 import '../enums/action_type.dart';
+import '../enums/app_state.dart'; // 🆕 إضافة
+import '../screens/sign_up_screen.dart'; // 🆕 إضافة
+
+// ⚠️ ملاحظة: يجب التأكد من وجود مسارات الملفات التالية في مشروعك:
+// 1. ../models/user_profile.dart
+// 2. ../enums/action_type.dart
+// 3. ../enums/app_state.dart
+// 4. sign_up_screen.dart
+// lib/services/ble_controller.dart
+// ...
+import '../enums/assistant_voice.dart'; // 🆕 إضافة هذا السطر
+// ------------------------------------------------------------------------
+// 🆕 المحدد الجديد لنوع الصوت (يفضل وضعه في lib/enums/assistant_voice.dart)
+// ------------------------------------------------------------------------
+
 
 // ------------------------------------------------------------------------
 // ثوابت خدمة Bluetooth
@@ -29,7 +43,6 @@ const String CONFIG_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a7";
 // ------------------------------------------------------------------------
 const String USER_PROFILE_KEY = 'user_profile_data';
 const String LANGUAGE_CODE_KEY = 'language_code';
-// 🔑 مفاتيح إضافية لتمكين دالة clearAllData من مسح البيانات بشكل شامل
 const String USER_PROFILE_PREFS_KEY = 'userProfile';
 const String GESTURE_CONFIG_PREFS_KEY = 'gestureConfig';
 
@@ -37,8 +50,6 @@ const String GESTURE_CONFIG_PREFS_KEY = 'gestureConfig';
 // ------------------------------------------------------------------------
 // ⚠️ مفتاح API الخاص بـ Gemini - يجب تعويضه بمفتاحك الفعلي
 // ------------------------------------------------------------------------
-// ❌ تـنـبـيـه: هذا المفتاح وهمي ("AIzaSyBwOMGLGl6GJsKkgvyT2Mz57vmdNWhOZJI") وهو سبب فشل خدمات Gemini الصوتية والأوامر الصوتية.
-// يجب استبداله بمفتاح API حقيقي خاص بك لكي تعمل الميزات بشكل صحيح.
 const String GEMINI_API_KEY = "AIzaSyBwOMGLGl6GJsKkgvyT2Mz57vmdNWhOZJI"; // مفتاح وهمي
 
 // ------------------------------------------------------------------------
@@ -56,6 +67,13 @@ const Map<String, String> _AVAILABLE_SCREENS = {
   'language': '/tts_stt', // Alias
   'home': '/home',
   'main': '/home', // Alias
+  'الرئيسية': '/home',
+  'الإعدادات': '/profile',
+  'الملف الشخصي': '/profile',
+  'الحساسية': '/allergies',
+  'البلوتوث': '/bluetooth',
+  'الإيماءات': '/gestures',
+  'الصوت': '/tts_stt',
 };
 
 
@@ -64,7 +82,19 @@ class BleController extends GetxController {
   // 1. Services & Variables
   // ------------------------------------------------------------------------
   final FlutterTts _flutterTts = FlutterTts();
+
+  // 💡 متغير جديد لحفظ قائمة الأصوات المتاحة
+  List<dynamic> _availableVoices = [];
+
   final SpeechToText _speechToText = SpeechToText();
+
+  // 🆕 متغير جديد لحالة الصوت
+  AssistantVoice _assistantVoiceSetting = AssistantVoice.none;
+  AssistantVoice get assistantVoiceSetting => _assistantVoiceSetting;
+
+  // 🆕 متغير جديد لحالة التطبيق العامة (تم استخدام متغير AppState.idle.obs في التعديلات)
+  // سيتم استخدام متغير AppState لتوضيح الحالة
+  final appState = AppState.idle.obs;
 
   bool _isListening = false;
   bool get isListening => _isListening;
@@ -78,9 +108,7 @@ class BleController extends GetxController {
   late final GenerativeModel _navigationModel;
 
   Timer? _sttTimeoutTimer;
-  // 🔑 تم التعديل: زيادة المهلة القصوى للسماح بإدخال أوامر أطول
   final Duration _maxListeningDuration = const Duration(seconds: 15);
-  // final Duration _sttTimeoutDuration = const Duration(seconds: 3); // غير مستخدمة حالياً
 
   final SharedPreferences _prefs;
 
@@ -92,16 +120,15 @@ class BleController extends GetxController {
   // ------------------------------------------------------------------------
   UserProfile? _userProfile;
   UserProfile? get userProfile => _userProfile;
-  // 🔑 تم تغيير اسم المتغير userProfile لكي لا يحدث تضارب مع الدالة المضافة
   set userProfile(UserProfile? profile) {
     _userProfile = profile;
   }
 
   bool get isUserRegistered => _userProfile != null;
 
-  // 💡 يجب أن تستخدم هذه الدوال قيم الملف الشخصي كافتراضي
   double get speechRate => _userProfile?.speechRate ?? 0.5;
   double get volume => _userProfile?.volume ?? 1.0;
+  // ⚠️ تم تغيير هذا Getter ليتوافق مع Enum الجديد
   String get assistantVoice => _userProfile?.assistantVoice ?? '';
 
   String _currentLanguageCode = 'en-US';
@@ -118,7 +145,7 @@ class BleController extends GetxController {
   };
   Map<String, ActionType> get gestureConfig => _gestureConfig;
 
-  // متغيرات البلوتوث... (لم يتم تغييرها)
+  // متغيرات البلوتوث...
   final List<ScanResult> scanResults = [];
   BluetoothDevice? connectedDevice;
   bool _isScanning = false;
@@ -153,7 +180,6 @@ class BleController extends GetxController {
     }
   }
 
-  // 🔑 التعديل المطلوب: استدعاء _initStt في onInit لضمان جاهزية الأذونات مبكراً
   @override
   void onInit() {
     super.onInit();
@@ -171,6 +197,7 @@ class BleController extends GetxController {
     await _loadUserProfile();
 
     final String? savedLang = _prefs.getString(LANGUAGE_CODE_KEY);
+    final String? savedVoice = _prefs.getString('assistantVoice'); // 🆕 تحميل مفتاح الصوت الجديد
 
     // توحيد تنسيق الـ locale
     String initialLocale = savedLang ?? _userProfile?.localeCode ?? Get.deviceLocale?.toString() ?? 'en_US';
@@ -187,12 +214,25 @@ class BleController extends GetxController {
       await saveUserProfile(_userProfile!, updateLocale: false);
     }
 
+    // 🆕 تعيين الإعداد الجديد لـ AssistantVoice
+    if (savedVoice != null) {
+      _assistantVoiceSetting = AssistantVoice.values.firstWhereOrNull((v) => v.name == savedVoice) ?? AssistantVoice.none;
+    } else {
+      // استخدام القيمة من ملف التعريف إذا كانت متاحة، وتحويلها إلى Enum
+      final String profileVoiceKey = _userProfile?.assistantVoice?.toLowerCase() ?? '';
+      _assistantVoiceSetting = (profileVoiceKey == 'male') ? AssistantVoice.male :
+      (profileVoiceKey == 'female') ? AssistantVoice.female : AssistantVoice.none;
+    }
+
+
+    // 💡 تحديث قائمة الأصوات المتاحة عند التهيئة
+    await _loadAvailableVoices();
     await _configureTtsSettings();
+
 
     final parts = _currentLanguageCode.split('-');
     Get.updateLocale(Locale(parts[0], parts.length > 1 ? parts[1] : null));
 
-    // _initStt يتم استدعاؤه في onInit، هنا نضمن التهيئة النهائية
     if(!_speechToTextInitialized) {
       await initSpeech();
     }
@@ -202,11 +242,20 @@ class BleController extends GetxController {
     if (kDebugMode) print("Controller initialized. Locale set to: $_currentLanguageCode");
   }
 
+  Future<void> _loadAvailableVoices() async {
+    try {
+      _availableVoices = await _flutterTts.getVoices;
+      if (kDebugMode) print("Loaded ${_availableVoices.length} available TTS voices.");
+    } catch (e) {
+      if (kDebugMode) print("Error loading TTS voices: $e");
+      _availableVoices = [];
+    }
+  }
+
   Future<void> _loadUserProfile() async {
     final String? jsonString = _prefs.getString(USER_PROFILE_KEY);
     if (jsonString != null && jsonString.isNotEmpty) {
       try {
-        // 💡 استخدام jsonDecode المتاح بعد تصحيح الاستيراد
         final Map<String, dynamic> jsonMap = jsonDecode(jsonString);
         _userProfile = UserProfile.fromJson(jsonMap);
         _gestureConfig = {
@@ -235,41 +284,94 @@ class BleController extends GetxController {
     update();
   }
 
-  // 🔑 التعديل المطلوب: تغيير التوقيع ليقبل متغيرين موضعيين (localeCode, voiceName)
-  Future<void> setLocaleAndTTS(String localeCode, String voiceName) async {
-    final parts = localeCode.split('-');
+  // 🆕 دالة للحصول على اسم صوت TTS افتراضي حسب اللغة والجنس (من الإضافات)
+  String _getTtsVoiceName(String langCode, AssistantVoice voice) {
+    // أمثلة لأصوات TTS (يجب التحقق منها)
+    if (langCode.startsWith('ar')) {
+      return voice == AssistantVoice.male ? 'ar-SA-Standard-C' : 'ar-SA-Standard-A';
+    }
+    return voice == AssistantVoice.male ? 'en-US-Standard-C' : 'en-US-Standard-A';
+  }
+
+  // 💡 الدالة الشاملة المطلوبة: setLocaleAndTTS - تم تحديثها لاستخدام Enum
+  Future<void> setLocaleAndTTS(String fullLocaleCode, AssistantVoice voice) async { // ⚠️ تم تغيير نوع الـ gender إلى AssistantVoice
+    if (kDebugMode) print("Setting Locale/TTS to: $fullLocaleCode, Voice: $voice");
+
+    // 1. إيقاف النطق الحالي
+    await stopTts();
+
+    final parts = fullLocaleCode.split('-');
     final locale = Locale(parts[0], parts.length > 1 ? parts[1] : null);
 
-    // حفظ اللغة الجديدة
-    _currentLanguageCode = localeCode;
+    // 2. تحديث وحفظ اللغة وإعدادات GetX
+    _currentLanguageCode = fullLocaleCode;
     Get.updateLocale(locale);
-    await _prefs.setString(LANGUAGE_CODE_KEY, localeCode);
+    await _prefs.setString(LANGUAGE_CODE_KEY, fullLocaleCode);
+
+    // 3. تحديث وحفظ الصوت
+    _assistantVoiceSetting = voice;
+    await _prefs.setString('assistantVoice', voice.name); // 🆕 حفظ اسم الـ Enum
+
+    // 4. تجهيز أو تحديث الملف الشخصي
+    final String voiceKey = voice.name; // تحويل الـ Enum إلى String للحفظ في UserProfile
+
+    UserProfile currentProfile = _userProfile ?? UserProfile(
+      // استخدام قيم افتراضية لملف شخصي جديد
+      fullName: '',
+      age: 0,
+      email: '',
+      password: '',
+      bloodType: '',
+      sex: '',
+      allergies: '',
+      medications: '',
+      diseases: '',
+      localeCode: fullLocaleCode,
+      speechRate: 0.5,
+      volume: 1.0,
+      assistantVoice: voiceKey, // استخدام Enum
+      shakeTwiceAction: ActionType.sos_emergency.codeName,
+      tapThreeTimesAction: ActionType.call_contact.codeName,
+      longPressAction: ActionType.disable_feature.codeName,
+    );
 
     if (_userProfile != null) {
       // تحديث وحفظ الملف الشخصي باللغة والصوت الجديدين
       final updatedProfile = _userProfile!.copyWith(
-        localeCode: localeCode,
-        assistantVoice: voiceName,
+        localeCode: fullLocaleCode,
+        assistantVoice: voiceKey, // تحديث الجنس
       );
       await saveUserProfile(updatedProfile, updateLocale: false);
     } else {
-      // فقط إعدادات TTS إذا لم يكن هناك ملف شخصي
-      await _configureTtsSettings();
+      // حفظ الملف الشخصي الجديد
+      await saveUserProfile(currentProfile, updateLocale: false);
     }
 
-    update();
+    // 5. تطبيق إعدادات TTS
+    await _configureTtsSettings();
+
+    // 6. ⛔️ FIX: إزالة التنقل Get.offAll() من هنا لكي لا يحدث الخطأ في main() قبل تشغيل GetMaterialApp.
+    // التنقل الآن يتم بواسطة SplashScreen.
+    // Get.offAll(() => const SignUpScreen());
+
+    Future.microtask(() => update());
   }
 
 
   Future<bool> saveUserProfile(UserProfile profile, {bool updateLocale = true}) async {
     try {
-      // 💡 استخدام jsonEncode المتاح بعد تصحيح الاستيراد
       final jsonString = jsonEncode(profile.toJson());
       await _prefs.setString(USER_PROFILE_KEY, jsonString);
-      // 🔑 تم إضافة مفتاح إضافي للتمكين من المسح الشامل في clearAllData
       await _prefs.setString(USER_PROFILE_PREFS_KEY, jsonString);
 
       _userProfile = profile;
+
+      // 🆕 تحديث متغير الـ AssistantVoice
+      final String profileVoiceKey = profile.assistantVoice.toLowerCase();
+      _assistantVoiceSetting = (profileVoiceKey == 'male') ? AssistantVoice.male :
+      (profileVoiceKey == 'female') ? AssistantVoice.female : AssistantVoice.none;
+      await _prefs.setString('assistantVoice', _assistantVoiceSetting.name);
+
 
       _gestureConfig = {
         'shakeTwiceAction': ActionTypeExtension.fromCodeName(profile.shakeTwiceAction),
@@ -291,7 +393,6 @@ class BleController extends GetxController {
       return true;
     } catch (e) {
       if (kDebugMode) print("CRITICAL ERROR: Failed to save user profile: $e");
-      // يتم استخدام .tr هنا للافتراض بوجود تعريب
       await speak("profile_save_failed".tr);
       return false;
     }
@@ -301,10 +402,11 @@ class BleController extends GetxController {
     _userProfile = null;
     await _prefs.remove(USER_PROFILE_KEY);
     await _prefs.remove(LANGUAGE_CODE_KEY);
-    // 🔑 إزالة المفتاح الإضافي
     await _prefs.remove(USER_PROFILE_PREFS_KEY);
-    await _prefs.remove(GESTURE_CONFIG_PREFS_KEY); // إزالة إعدادات الإيماءات إذا كانت محفوظة بشكل منفصل
+    await _prefs.remove(GESTURE_CONFIG_PREFS_KEY);
+    await _prefs.remove('assistantVoice'); // 🆕 إزالة مفتاح الصوت
 
+    _assistantVoiceSetting = AssistantVoice.none; // 🆕 إعادة تعيين
     _currentLanguageCode = 'en-US';
     Get.updateLocale(const Locale('en', 'US'));
 
@@ -320,28 +422,26 @@ class BleController extends GetxController {
     await _clearUserData();
   }
 
-  // 🔑 الدالة المفقودة لتسجيل الخروج ومسح جميع البيانات (لحل الخطأ: The method 'clearAllData' isn't defined)
   Future<void> clearAllData() async {
-    // 💡 إزالة جميع بيانات المستخدم والإعدادات المحفوظة
     await _prefs.remove(USER_PROFILE_KEY);
     await _prefs.remove(LANGUAGE_CODE_KEY);
     await _prefs.remove(USER_PROFILE_PREFS_KEY);
     await _prefs.remove(GESTURE_CONFIG_PREFS_KEY);
+    await _prefs.remove('assistantVoice'); // 🆕 إزالة مفتاح الصوت
 
-    // إعادة تعيين حالة المتحكم
-    userProfile = null; // إعادة تعيين الملف الشخصي في المتحكم
+    userProfile = null;
+    _assistantVoiceSetting = AssistantVoice.none; // 🆕 إعادة تعيين
     _currentLanguageCode = 'en-US';
     Get.updateLocale(const Locale('en', 'US'));
 
-    // إيقاف أي عمليات بلوتوث أو استماع
     stopListening(shouldSpeakStop: false);
     if (connectedDevice != null) {
-      await disconnect(); // استخدام دالة الفصل الموجودة
+      await disconnect();
     }
 
-    _isAppInitialized = false; // قد يكون من المفيد إعادة التمهيد لاحقاً
+    _isAppInitialized = false;
 
-    update(); // لتحديث أي واجهات مستخدم تعتمد على حالة المتحكم
+    update();
     if (kDebugMode) print("All user data and connections cleared.");
   }
 
@@ -352,63 +452,62 @@ class BleController extends GetxController {
 
   Future<void> _configureTtsSettings() async {
     await _flutterTts.stop();
-
     try {
+      // 1. إعداد اللغة
       await _flutterTts.setLanguage(_currentLanguageCode);
 
-      if (_userProfile?.assistantVoice != null && _userProfile!.assistantVoice.isNotEmpty) {
-        // يتم جلب الأصوات المتاحة
-        List<dynamic> voices = await _flutterTts.getVoices;
-        dynamic matchingVoice;
+      // 2. محاولة إيجاد الصوت المطابق للجنس المفضل
+      final String targetVoiceKey = _assistantVoiceSetting.name; // 🆕 استخدام الـ Enum
 
-        final String targetVoiceKey = _userProfile!.assistantVoice;
-        final String currentLocale = _currentLanguageCode;
+      if (_assistantVoiceSetting != AssistantVoice.none) {
+        // تحديث الأصوات للتأكد من الحصول على القائمة الأحدث
+        await _loadAvailableVoices();
+
         final String currentLanguage = _currentLanguageCode.split('-').first;
 
-        // البحث الاحترافي عن الصوت
-        if (targetVoiceKey.toLowerCase() == 'kore') {
-          matchingVoice = voices.firstWhereOrNull(
-                (v) => v['name'].toString().toLowerCase().contains('kore'),
-          );
-        } else if (targetVoiceKey.toLowerCase() == 'male') {
-          // 🔑 بحث احترافي: عن صوت ذكر مطابق للغة الحالية (أو اللغة الأساسية)
-          matchingVoice = voices.firstWhereOrNull(
-                (v) => (v['gender'] == 'male' || v['name'].toString().toLowerCase().contains('male'))
-                && (v['locale'] == currentLocale || v['locale'].toString().startsWith(currentLanguage)),
-          );
-        } else if (targetVoiceKey.toLowerCase() == 'female') {
-          // 🔑 بحث احترافي: عن صوت أنثى مطابق للغة الحالية (أو اللغة الأساسية)
-          matchingVoice = voices.firstWhereOrNull(
-                (v) => (v['gender'] == 'female' || v['name'].toString().toLowerCase().contains('female'))
-                && (v['locale'] == currentLocale || v['locale'].toString().startsWith(currentLanguage)),
-          );
-        } else {
-          // البحث عن صوت باسم محدد
-          matchingVoice = voices.firstWhereOrNull(
-                (v) => v['name'] == targetVoiceKey && v['locale'] == currentLocale,
-          );
-        }
+        dynamic matchingVoice = _availableVoices.firstWhereOrNull(
+              (v) {
+            final String voiceName = v['name']?.toString().toLowerCase() ?? '';
+            final String voiceLocale = v['locale']?.toString().toLowerCase() ?? '';
+            final String? voiceGender = v['gender']?.toString().toLowerCase(); // قد يكون null
 
+            final bool isCorrectLocale = voiceLocale.startsWith(currentLanguage);
+
+            // 🔑 منطق البحث المحسّن: يعتمد على الخاصية 'gender' أولاً، ثم يبحث في اسم الصوت
+            final bool isCorrectGenderProperty = (targetVoiceKey == 'male' && voiceGender == 'male') ||
+                (targetVoiceKey == 'female' && voiceGender == 'female');
+
+            // بحث في الاسم كاحتياطي
+            final bool isCorrectGenderInName = (targetVoiceKey == 'male' && (voiceName.contains('male') || voiceName.contains('boy'))) ||
+                (targetVoiceKey == 'female' && (voiceName.contains('female') || voiceName.contains('girl')));
+
+            return isCorrectLocale && (isCorrectGenderProperty || isCorrectGenderInName);
+          },
+        );
+
+        // 3. تطبيق الصوت إذا وجد
         if (matchingVoice != null) {
-          // 💡 يتم استخدام .cast لتجنب أخطاء وقت التشغيل إذا كانت القائمة غير مضبوطة
-          await _flutterTts.setVoice(matchingVoice.cast<String, String>());
+          await _flutterTts.setVoice(matchingVoice as Map<String, String>);
+          if (kDebugMode) print("TTS Voice set to: ${matchingVoice['name']} in locale $_currentLanguageCode (Gender: $targetVoiceKey)");
         } else {
-          // إذا لم يتم العثور على مطابقة، نستخدم أول صوت متاح للغة الحالية
-          final firstMatch = voices.firstWhereOrNull((v) => v['locale'] == currentLocale);
-          if (firstMatch != null) {
-            await _flutterTts.setVoice(firstMatch.cast<String, String>());
-          }
+          if (kDebugMode) print("Warning: Specific ${targetVoiceKey} voice not found for locale $_currentLanguageCode. Using default TTS voice for locale.");
+          await _flutterTts.setLanguage(_currentLanguageCode); // العودة إلى اللغة فقط
         }
+      } else {
+        // لم يتم تحديد جنس الصوت، استخدام الافتراضي للغة
+        await _flutterTts.setLanguage(_currentLanguageCode);
       }
-    } catch (e) {
-      if (kDebugMode) print("Warning: Could not set TTS language to $_currentLanguageCode. $e");
-    }
 
-    await _flutterTts.setSpeechRate(speechRate);
-    await _flutterTts.setVolume(volume);
+
+      // 4. إعداد السرعة ومستوى الصوت
+      await _flutterTts.setSpeechRate(speechRate);
+      await _flutterTts.setVolume(volume);
+
+    } catch (e) {
+      if (kDebugMode) print("Error configuring TTS: $e");
+    }
   }
 
-  // ❌ لم يتم إضافة الدالة الجديدة هنا، بل تم الاحتفاظ بالدالة الأصلية الأكثر اكتمالاً
   Future<void> updateTtsSettings({double? rate, double? vol, String? locale}) async {
     if (_userProfile == null) return;
 
@@ -417,29 +516,35 @@ class BleController extends GetxController {
       volume: vol,
       localeCode: locale,
     );
-    // saveUserProfile سينفذ _configureTtsSettings
     await saveUserProfile(updatedProfile);
   }
 
-  // 🔑 دالة تحديث الصوت: يتم حفظ الصوت ثم استدعاء saveUserProfile الذي ينفذ _configureTtsSettings
-  Future<void> updateAssistantVoice(String voiceKey) async {
+  // 💡 الدالة المطلوبة: updateAssistantVoice - تم تحديثها لاستخدام Enum
+  Future<void> updateAssistantVoice(AssistantVoice voice) async { // ⚠️ تم تغيير نوع الإدخال
     if (_userProfile == null) return;
 
+    // 1. تحديث وحفظ الإعداد الجديد
+    _assistantVoiceSetting = voice;
+    await _prefs.setString('assistantVoice', voice.name); // 🆕 حفظ اسم الـ Enum
+
+    // 2. تحديث وحفظ الملف الشخصي (للحفاظ على التوافق مع بيانات المستخدم)
     final updatedProfile = _userProfile!.copyWith(
-      assistantVoice: voiceKey,
+      assistantVoice: voice.name,
     );
+    // 🔑 حفظ الملف الشخصي دون تحديث الـ locale (يتم الحفظ فقط)
     await saveUserProfile(updatedProfile, updateLocale: false);
-    // 💡 تأكيد إضافي بأن الإعدادات تم تطبيقها مباشرة بعد الحفظ (عبر saveUserProfile -> _configureTtsSettings)
-    if (kDebugMode) print("Assistant voice set to $voiceKey and TTS settings configured immediately.");
+
+    // 3. تطبيق إعدادات TTS فوراً (للتجربة)
+    await _configureTtsSettings();
+
+    if (kDebugMode) print("Assistant voice set to $voice and TTS settings configured immediately.");
   }
 
   /// نطق النص المحدد بعد إيقاف أي عملية استماع أو نطق
   Future<void> speak(String text, {String? localeCode, String? voice}) async {
-    // 🔑 التعديل الحاسم 1: إيقاف أي نطق سابق لمنع التداخل (إدارة السياق)
     await _flutterTts.stop();
 
     if (_speechToText.isListening) {
-      // 💡 لا تستخدم stopListening هنا، استخدم stop() مباشرة لتجنب تشغيل المنطق الإضافي
       await _speechToText.stop();
       _isListening = false;
       update();
@@ -449,10 +554,10 @@ class BleController extends GetxController {
       update();
     });
 
-    // 🔑 تطبيق إعدادات التخصيص المحفوظة (السرعة، الحجم، الصوت)
+    // 🔑 إعادة تهيئة إعدادات TTS لتطبيق الصوت والجنس الأحدث
     await _configureTtsSettings();
 
-    // يتم استخدام .tr هنا للافتراض بوجود تعريب
+    // 🔑 استخدام .tr لضمان التعريب بناءً على GetX
     await _flutterTts.speak(text.tr);
     update();
   }
@@ -461,24 +566,33 @@ class BleController extends GetxController {
     await _flutterTts.stop();
   }
 
+  // 💡 الدالة المطلوبة: stopTts
+  Future<void> stopTts() async {
+    await stop();
+    if (kDebugMode) print("TTS speaking stopped.");
+  }
+
+
+  /// 🔑 تم إضافة هذه الدالة لحل خطأ stopSpeaking() الذي ظهر في الـ log
+  Future<void> stopSpeaking() async {
+    await stop();
+  }
+
   // ------------------------------------------------------------------------
   // 🎙️ STT Logic (Speech-to-Text) - Robust Initialization
   // ------------------------------------------------------------------------
 
-  // 🔑 دالة تهيئة STT ومراجعة الأذونات
   Future<void> _initStt() async {
     if (kIsWeb) {
       _speechToTextInitialized = true;
       return;
     }
 
-    // 1. طلب إذن الميكروفون
     final status = await Permission.microphone.request();
 
     if (status.isGranted) {
       await initSpeech();
     } else {
-      // إشعار صوتي في حال رفض الإذن
       await speak('microphone_permission_denied_tts'.tr);
       if (kDebugMode) print("Microphone permission denied.");
     }
@@ -508,7 +622,6 @@ class BleController extends GetxController {
             _isListening = true;
           } else if (status == 'notListening') {
             _isListening = false;
-            // يتم إلغاء المؤقت عند التوقف الطبيعي أو القسري
             _sttTimeoutTimer?.cancel();
           }
           update();
@@ -533,7 +646,7 @@ class BleController extends GetxController {
   /// بدء عملية الاستماع
   Future<void> startListening({required Function(String) onResult}) async {
     if (!_speechToTextInitialized) {
-      await _initStt(); // إعادة المحاولة لطلب الأذونات إذا لزم الأمر
+      await _initStt();
       if (!_speechToTextInitialized) {
         await speak("speech_recognition_error".tr);
         return;
@@ -547,10 +660,8 @@ class BleController extends GetxController {
     update();
 
     _sttTimeoutTimer?.cancel();
-    // 🔑 إدارة المهلة: إذا لم يتم الحصول على نتيجة نهائية خلال أقصى مدة، قم بتنفيذ النتيجة الجزئية الأخيرة.
     _sttTimeoutTimer = Timer(_maxListeningDuration, () {
       if (kDebugMode) print("STT Timeout reached. Processing last words.");
-      // إيقاف الاستماع قسراً ومعالجة النتيجة
       stopListening(shouldSpeakStop: false);
       onResult(_lastWords);
       speak('listening_timeout_prompt'.tr);
@@ -563,7 +674,6 @@ class BleController extends GetxController {
           update();
 
           if (result.finalResult) {
-            // 🔑 إيقاف الاستماع فور الحصول على نتيجة نهائية
             _sttTimeoutTimer?.cancel();
             stopListening(shouldSpeakStop: false);
             onResult(_lastWords);
@@ -585,15 +695,11 @@ class BleController extends GetxController {
   void stopListening({bool shouldSpeakStop = true}) {
     _sttTimeoutTimer?.cancel();
     if (_speechToText.isListening) {
-      // 💡 يتم إيقاف الخدمة
       _speechToText.stop();
     }
     if (_isListening) {
       _isListening = false;
       update();
-      if (shouldSpeakStop) {
-        // 💡 يمكن هنا إضافة نطق "تم إيقاف التسجيل"
-      }
     }
   }
 
@@ -601,7 +707,52 @@ class BleController extends GetxController {
   // 🧠 Gemini Integration (لمعالجة أوامر الدردشة والتنقل)
   // ----------------------------------------------------------------------
 
-  /// دالة معالجة الأوامر الصوتية الجاهزة للاستخدام في أي شاشة
+  /// Helper to check if the command is a likely navigation request (للتنقل)
+  bool _isNavigationCommand(String text) {
+    final lowerText = text.toLowerCase().trim();
+    return lowerText.startsWith('go to') ||
+        lowerText.startsWith('take me to') ||
+        lowerText.startsWith('navigate to') ||
+        lowerText.startsWith('open') ||
+        lowerText.startsWith('return') ||
+        lowerText.startsWith('go back') ||
+        lowerText.contains('شاشة') ||
+        lowerText.contains('اذهب إلى') ||
+        lowerText.contains('العودة') ||
+        lowerText.contains('اريد');
+  }
+
+  /// **🔑 الدالة المركزية المطلوبة: processSttResultAsCommandOrQuery**
+  /// تقوم بتحليل النص المدخل وتوجيهه إما للتنقل أو لنموذج الدردشة.
+  Future<String> processSttResultAsCommandOrQuery(String text) async {
+    if (text.isEmpty) {
+      await speak("no_command_received".tr);
+      return "No text received.";
+    }
+
+    // 1. محاولة معالجة الأمر كأمر تنقل
+    if (_isNavigationCommand(text)) {
+      final navigationResult = await handleNavigationCommand(text);
+
+      // نطق نتيجة التنقل فوراً
+      await speak(navigationResult);
+
+      // إذا نجح التنقل أو كان أمر 'العودة'
+      if (navigationResult != 'screen_not_found'.tr && navigationResult != 'navigation_parse_error'.tr) {
+        return navigationResult;
+      }
+
+      // إذا فشل التنقل، يتم تمرير النص لنموذج Gemini كـ fallback
+    }
+
+    // 2. إذا لم يكن أمراً واضحاً أو أمر تنقل فاشل، يتم إرساله كاستفسار لنموذج الدردشة العام
+    final geminiText = await processVoiceCommand(text);
+    await speak(geminiText);
+
+    return geminiText;
+  }
+
+  /// دالة معالجة الأوامر الصوتية الجاهزة للاستخدام في أي شاشة (Gemini Chat)
   Future<String> processVoiceCommand(String text) async {
     if (GEMINI_API_KEY.isEmpty || GEMINI_API_KEY == 'AIzaSyBwOMGLGl6GJsKkgvyT2Mz57vmdNWhOZJI') {
       return "gemini_not_configured".tr;
@@ -611,13 +762,28 @@ class BleController extends GetxController {
     final languageCode = _currentLanguageCode.split('-').first;
     final languageName = languageCode == 'ar' ? 'Arabic' : 'English';
 
+    // 🔑 سياق المستخدم (User Context)
+    final String userContext = profile != null ? '''
+    User Profile Details:
+    - Name: ${profile.fullName}
+    - Age: ${profile.age}
+    - Blood Type: ${profile.bloodType}
+    - Allergies: ${profile.allergies}
+    - Medications: ${profile.medications}
+    - Diseases/Conditions: ${profile.diseases}
+    ''' : 'User profile details are unavailable.';
+
+
     final String systemInstruction = '''
     You are an AI assistant specialized for blind and visually impaired users, providing brief, actionable, and voice-friendly responses. 
-    The user is named ${profile?.fullName ?? 'User'}. They are ${profile?.age.toString() ?? 'unknown'} years old. 
+    Your primary goal is clarity and conciseness for a voice interface.
+    
+    $userContext
+    
     Your tasks are:
     1. **Execute Commands:** If the request is a simple command (like 'call contact' or 'SOS'), respond with a confirmation phrase, but do not execute the action yourself.
     2. **Answer Questions:** If the request is a general question, answer it concisely.
-    3. **Use Context:** If the request relates to their age or name, provide the requested information.
+    3. **Use Context:** If the request relates to their medical history, allergies, age, or name, use the available profile details to provide the requested information.
     4. **If the request is nonsensical or unclear, ask the user to repeat the command.**
     Respond in the user's current language: $languageName. Keep the response brief and direct.
     ''';
@@ -685,21 +851,54 @@ class BleController extends GetxController {
     }
   }
 
-  /// دالة طلب الرد من Gemini والنطق به مباشرة
-  // 🔑 التعديل الحاسم: تم تغيير التوقيع ليرجع Future<String>
+  /// دالة طلب الرد من Gemini والنطق به مباشرة (للتوافق مع الاستدعاءات القديمة أو الـ fallbacks)
   Future<String> getGeminiResponse(String prompt) async {
     stopListening(shouldSpeakStop: false);
     await speak("processing_command".tr);
     final geminiText = await processVoiceCommand(prompt);
     await speak(geminiText);
 
-    // 💡 الآن نرجع نص الرد
     return geminiText;
   }
 
-  // ----------------------------------------------------------------------
-  // 🚀 Gemini Navigation Logic (منطق التنقل الصوتي)
-  // ----------------------------------------------------------------------
+  /// الدالة العامة لمعالجة أمر التنقل وتنفيذه والنطق بالنتيجة.
+  /// هذه الدالة تقوم بالتنقل وإرجاع الرسالة المطلوبة، والدالة processSttResultAsCommandOrQuery تتولى النطق.
+  Future<String> handleNavigationCommand(String voiceCommand) async {
+    // 1. تحليل الأمر الصوتي
+    final parsedCommand = await _parseVoiceCommand(voiceCommand);
+    final action = parsedCommand['action'];
+    final target = parsedCommand['target'];
+
+    // 2. معالجة أمر العودة للخلف
+    if (action == 'RETURN' && target == 'back') {
+      if (Get.previousRoute.isNotEmpty) {
+        Get.back();
+        return 'going_back'.tr;
+      } else {
+        return 'screen_not_found'.tr; // يمكن استخدام رسالة مختلفة لعدم وجود مسار سابق
+      }
+    }
+
+    // 3. معالجة أمر التنقل لشاشة محددة
+    if (action == 'NAVIGATE') {
+      final String? targetPath = _AVAILABLE_SCREENS[target];
+
+      if (targetPath != null) {
+        // التأكد من أننا لسنا على الشاشة المطلوبة بالفعل
+        if (Get.currentRoute != targetPath) {
+          Get.toNamed(targetPath);
+        }
+
+        final screenName = target!.tr;
+        return 'navigating_to'.trParams({'screen': screenName});
+      } else {
+        return 'screen_not_found'.tr;
+      }
+    } else {
+      // UNKNOWN أو ERROR
+      return 'navigation_parse_error'.tr;
+    }
+  }
 
   /// دالة داخلية لتحليل أمر التنقل الصوتي باستخدام نموذج Gemini
   Future<Map<String, String>> _parseVoiceCommand(String query) async {
@@ -734,10 +933,8 @@ class BleController extends GetxController {
       );
 
       String jsonText = response.text!.trim();
-      // تنظيف استجابة النموذج إذا كانت تحتوي على تنسيق JSON
       jsonText = jsonText.replaceAll('```json', '').replaceAll('```', '').trim();
 
-      // 💡 استخدام json.decode المتاح بعد تصحيح الاستيراد
       final Map<String, dynamic> result = json.decode(jsonText);
       return {
         'action': result['action'] as String,
@@ -749,43 +946,6 @@ class BleController extends GetxController {
         print("Gemini Navigation Error: $e");
       }
       return {'action': 'UNKNOWN', 'target': 'ERROR'};
-    }
-  }
-
-
-  /// الدالة العامة لمعالجة أمر التنقل وتنفيذه والنطق بالنتيجة.
-  Future<String> handleNavigationCommand(String voiceCommand) async {
-    // 1. تحليل الأمر الصوتي
-    final parsedCommand = await _parseVoiceCommand(voiceCommand);
-    final action = parsedCommand['action'];
-    final target = parsedCommand['target'];
-
-    // 2. معالجة أمر العودة للخلف
-    if (action == 'RETURN' && target == 'back') {
-      if (Get.previousRoute.isNotEmpty) {
-        Get.back();
-        return 'going_back'.tr;
-      } else {
-        return 'screen_not_found'.tr; // يمكن استخدام رسالة مختلفة لعدم وجود مسار سابق
-      }
-    }
-
-    // 3. معالجة أمر التنقل لشاشة محددة
-    if (action == 'NAVIGATE') {
-      final String? targetPath = _AVAILABLE_SCREENS[target];
-
-      if (targetPath != null) {
-        Get.toNamed(targetPath);
-
-        // ترجمة اسم الشاشة إذا كانت الترجمة متوفرة
-        final screenName = target!.tr;
-        return 'navigating_to'.trParams({'screen': screenName});
-      } else {
-        return 'screen_not_found'.tr;
-      }
-    } else {
-      // UNKNOWN أو ERROR
-      return 'navigation_parse_error'.tr;
     }
   }
 
@@ -896,7 +1056,6 @@ class BleController extends GetxController {
       await characteristic.setNotifyValue(true);
       _dataSubscription = characteristic.value.listen((value) {
         if (value.isNotEmpty) {
-          // 💡 استخدام utf8 المتاح بعد تصحيح الاستيراد
           final command = utf8.decode(value);
           _handleReceivedData(command);
         }
@@ -926,7 +1085,6 @@ class BleController extends GetxController {
     try {
       _gestureConfig = config.map((key, value) => MapEntry(key, ActionTypeExtension.fromCodeName(value)));
 
-      // 💡 استخدام jsonEncode المتاح بعد تصحيح الاستيراد
       final String configJson = jsonEncode(config);
       // 💡 هنا يجب إضافة منطق إرسال البيانات الفعلية عبر BLE
 
@@ -946,7 +1104,6 @@ class BleController extends GetxController {
     final spokenMessageKey = _mapCommandToMessage(command);
 
     final spokenMessage = spokenMessageKey.contains('COMMAND_DEFAULT')
-    // يتم استخدام .tr هنا للافتراض بوجود تعريب
         ? "command_received".trParams({'command': command}) ?? 'Command received: $command'
         : spokenMessageKey.tr;
 

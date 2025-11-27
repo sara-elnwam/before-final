@@ -12,10 +12,57 @@ import 'screens/sign_up_screen.dart';
 import 'utils/app_translations.dart';
 import 'services/ble_controller.dart';
 import 'models/user_profile.dart';
-// 🆕 استيراد شاشة اختيار الصوت
-import 'screens/voice_selection_screen.dart';
 
-// ⚠️ شاشة الملف الطبي الوهمية (يجب استبدالها بشاشتك الفعلية لاحقًا)
+// 🔑 FIX: استيراد شاشة الصوت وإخفاء AssistantVoice لتجنب تضارب النوع
+import 'screens/voice_selection_screen.dart' hide AssistantVoice;
+// 🔑 FIX: يجب استيراد enum AssistantVoice لتهيئة TTS في main
+import 'package:blind/enums/assistant_voice.dart';
+
+
+// ====================================================================
+// 🆕 شاشة البداية (Splash Screen) - تعرض الصورة لمدة ثانيتين
+// ====================================================================
+
+class SplashScreen extends StatefulWidget {
+  final Widget nextScreen;
+
+  const SplashScreen({
+    super.key,
+    required this.nextScreen,
+  });
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // الانتقال إلى الشاشة التالية بعد ثانيتين
+    Future.delayed(const Duration(seconds: 2), () {
+      Get.offAll(() => widget.nextScreen);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.black, // خلفية سوداء لتناسب تصميمك
+      body: Center(
+        // 🔑 استخدام الصورة الموجودة في assets/images/UI.png
+        // (تأكد من إضافة المسار في ملف pubspec.yaml)
+        child: Image(
+          image: AssetImage('assets/images/UI.png'),
+          fit: BoxFit.cover, // يغطي الشاشة أو يتم تعديله ليناسب رؤيتك
+        ),
+      ),
+    );
+  }
+}
+
+
+// ⚠️ شاشة الملف الطبي الوهمية
 class MedicalProfileScreen extends StatelessWidget {
   const MedicalProfileScreen({super.key});
   @override
@@ -61,7 +108,7 @@ class MedicalProfileScreen extends StatelessWidget {
   }
 }
 
-// ⚠️ يجب التأكد من وجود هذه الشاشة لاستخدامها كمسار افتراضي للمسجلين
+// ⚠️ شاشة الدردشة الرئيسية الوهمية
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
   @override
@@ -74,7 +121,7 @@ class MainChatScreen extends StatelessWidget {
 }
 
 // ====================================================================
-// 🚀 دالة تهيئة الإطلاق والتحقق من حالة المستخدم
+// 🚀 دالة تهيئة الإطلاق والتحقق من حالة المستخدم (مع التعديل)
 // ====================================================================
 
 Future<void> main() async {
@@ -85,25 +132,43 @@ Future<void> main() async {
   final bleController = Get.put(BleController(prefs: prefs));
   Get.put(bleController, permanent: true);
 
-  // 4. تحديد الشاشة الأولية بناءً على حالة المستخدم:
-  final AuthNextRoute initialNextRoute;
-  final UserProfile? userProfile = bleController.userProfile; // 🔑 الوصول الآمن للملف
+  // 🔑 1. تحديد اللغة الأولية (لغة الجهاز)
+  final UserProfile? userProfile = bleController.userProfile;
+  String languageCode = userProfile?.localeCode.split('-').first ??
+      ui.window.locale.languageCode;
 
-  final initialLocale = Locale(userProfile?.localeCode.split('-').first ?? 'ar', userProfile?.localeCode.split('-').last ?? 'SA');
-
-  // A. المستخدم الجديد (إذا لم يكن هناك ملف مستخدم أو الاسم فارغ): يبدأ ببوابة المصادقة التي تذهب لشاشة اللغة
-  if (userProfile == null || userProfile.fullName.isEmpty) { // 🔑 FIX: استخدام التحقق الآمن من null
-    // التسلسل: بصمة -> لغة -> صوت -> تسجيل
-    initialNextRoute = AuthNextRoute.languageSelection;
+  // التحقق من الدعم وتعيين الافتراضي (ar أو en)
+  if (languageCode != 'ar' && languageCode != 'en') {
+    languageCode = 'en';
   }
-  // B. المستخدم المسجل: يبدأ ببوابة المصادقة التي تذهب للشاشة الرئيسية/التحقق
+  String fullLocaleCode = languageCode == 'ar' ? 'ar-SA' : 'en-US';
+
+  // 🔑 2. تهيئة TTS/STT باللغة المكتشفة قبل عرض أي شاشة
+  // هذا يضمن أن LocalAuthScreen تنطق باللغة الصحيحة فوراً. (شرط التدريب)
+  await bleController.setLocaleAndTTS(fullLocaleCode, AssistantVoice.male);
+
+  // 🔑 3. ضبط الـ Locale في GetX
+  final initialLocale = Locale(languageCode, languageCode == 'ar' ? 'SA' : 'US');
+
+  // 4. تحديد المسار الذي يجب أن تذهب إليه شاشة البصمة (LocalAuthScreen) بعد نجاح المصادقة
+  final AuthNextRoute authSuccessRoute;
+
+  // A. المستخدم الجديد (إذا لم يكن هناك ملف مستخدم أو الاسم فارغ):
+  if (userProfile == null || userProfile.fullName.isEmpty) {
+    // التسلسل: بصمة -> لغة -> صوت -> تسجيل (كما تم التحديد)
+    authSuccessRoute = AuthNextRoute.languageSelection;
+  }
+  // B. المستخدم المسجل:
   else {
-    // التسلسل: بصمة -> التحقق من اكتمال الملف -> رئيسية/ملف طبي
-    initialNextRoute = AuthNextRoute.mainScreen;
+    // بما أن المستخدم مسجل، شاشة البصمة ستنقله مباشرة للشاشة الرئيسية
+    authSuccessRoute = AuthNextRoute.mainScreen;
   }
 
-  // شاشة البداية هي دائما LocalAuthScreen مع المسار المناسب
-  final initialScreen = LocalAuthScreen(nextRoute: initialNextRoute); // 🔑 تهيئة الشاشة هنا
+  // 1. الشاشة التالية بعد البداية (Splash) هي شاشة البصمة (LocalAuthScreen)
+  final nextAuthScreen = LocalAuthScreen(nextRoute: authSuccessRoute);
+
+  // 2. شاشة البداية هي الآن الـ SplashScreen التي تنتقل تلقائيًا
+  final initialScreen = SplashScreen(nextScreen: nextAuthScreen);
 
   runApp(MyApp(
     initialScreen: initialScreen,
@@ -146,9 +211,9 @@ class MyApp extends StatelessWidget {
       getPages: [
         GetPage(name: '/auth-gate', page: () => const LocalAuthScreen(nextRoute: AuthNextRoute.mainScreen)),
         GetPage(name: '/lang-select', page: () => const LanguageSelectionScreen()),
-        GetPage(name: '/voice-select', page: () => const ChooseVoiceScreen()), // 🆕 مسار اختيار الصوت
+        GetPage(name: '/voice-select', page: () => const ChooseVoiceScreen()),
         GetPage(name: '/signup', page: () => const SignUpScreen()),
-        GetPage(name: '/medical-profile', page: () => const MedicalProfileScreen()), // 🆕 مسار الملف الطبي
+        GetPage(name: '/medical-profile', page: () => const MedicalProfileScreen()),
         GetPage(name: '/main', page: () => const MainChatScreen()),
       ],
     );

@@ -6,209 +6,205 @@ import 'dart:async';
 import 'package:get/get.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ نحتاج هذا لحفظ حالة الدخول
 
 import '../services/ble_controller.dart';
-import 'main_chat_screen.dart'; // ✅ يجب استيراد الشاشة الرئيسية
-import 'sign_up_screen.dart'; // ✅ يجب استيراد شاشة التسجيل
-import 'language_selection_screen.dart'; // ✅ يجب استيراد شاشة اللغة
+import 'main_chat_screen.dart';
+import 'sign_up_screen.dart'; // ✅ الاستيراد لشاشة التسجيل
+import 'language_selection_screen.dart';
+import 'voice_selection_screen.dart';
+import 'registration_screen.dart'; // لتأكيد إكمال الملف الطبي
 
 // Custom Colors
 const Color accentColor = Color(0xFFFFB267);
-const Color onBackground = Color(0xFFF8F8F8);
+const Color _screenBackground = Colors.black;
 
 // ✅ المحدد الجديد لتحديد المسار التالي بعد المصادقة
 enum AuthNextRoute {
-  // 1. للمستخدم الجديد: Auth -> Language Selection
   languageSelection,
-  // 2. للتسجيل الدخول العادي: Auth -> Check Profile Status -> Main / Medical Profile
   mainScreen,
-  // 3. لتأكيد عملية معينة (مثل تسجيل الخروج)
   logoutConfirm,
-  // 4. ✅ NEW: لتأكيد إكمال الملف الطبي/الشخصي (الخطوة الأخيرة قبل الرئيسية)
   profileConfirmation,
+  voiceSelection,
+  // 🆕 الحالة المضافة: للانتقال إلى شاشة تسجيل حساب جديد
+  signUp,
 }
 
 class LocalAuthScreen extends StatefulWidget {
   final AuthNextRoute nextRoute;
-  const LocalAuthScreen({super.key, required this.nextRoute});
+  final String? customRoute;
+
+  const LocalAuthScreen({
+    super.key,
+    required this.nextRoute,
+    this.customRoute,
+  });
 
   @override
   State<LocalAuthScreen> createState() => _LocalAuthScreenState();
 }
 
 class _LocalAuthScreenState extends State<LocalAuthScreen> {
-  final LocalAuthentication _auth = LocalAuthentication();
-  late final BleController _bleController;
-
-  bool _isAuthenticated = false;
+  final LocalAuthentication auth = LocalAuthentication();
+  bool _canCheckBiometrics = false;
   bool _isProcessing = true;
-  bool _biometricsAvailable = false;
-  Color _screenBackground = Colors.black;
+  late BleController _bleController;
 
   @override
   void initState() {
     super.initState();
-    // ✅ استرداد الـ Controller من GetX
     _bleController = Get.find<BleController>();
-    _checkBiometricsAndAuthenticate();
-  }
-
-  Future<void> _checkBiometricsAndAuthenticate() async {
-    // 1. فحص توفر البصمة
-    _biometricsAvailable = await _isBiometricsAvailable();
-
-    if (!_biometricsAvailable) {
-      // 💡 إذا لم تكن البصمة متاحة: نذهب فوراً للمسار التالي (افتراضياً، البصمة اختيارية)
-      _bleController.speak('auth_not_available_proceeding'.tr); // نص: المصادقة غير متاحة. انتقال للشاشة التالية.
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-        });
-      }
-      _navigateToNextRoute(widget.nextRoute);
-      return;
-    }
-
-    // 2. إذا كانت متاحة، نقوم ببدء المصادقة
-    if (mounted) {
-      setState(() {
-        _isProcessing = false;
-      });
-    }
-
-    // 💡 تأخير بسيط لإعطاء الـ UI فرصة للتحميل
+    _checkBiometrics();
+    // 📢 تفعيل TTS لطلب المصادقة
     Future.delayed(const Duration(milliseconds: 500), () {
-      _authenticate();
+      _bleController.speak('local_auth_reason'.tr);
     });
   }
 
-  Future<bool> _isBiometricsAvailable() async {
+  // ----------------------------------------------------------------------
+  // 🔐 منطق المصادقة
+  // ----------------------------------------------------------------------
+
+  Future<void> _checkBiometrics() async {
+    bool canCheckBiometrics;
     try {
-      final canCheck = await _auth.canCheckBiometrics;
-      if (!canCheck) return false;
-      final available = await _auth.getAvailableBiometrics();
-      return available.isNotEmpty;
+      canCheckBiometrics = await auth.canCheckBiometrics;
     } on PlatformException catch (e) {
-      // 💡 التعامل مع الأخطاء التي قد تمنع فحص البصمة
-      debugPrint('Biometrics check error: $e');
-      return false;
+      if (kDebugMode) print("Error checking biometrics: $e");
+      canCheckBiometrics = false;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _canCheckBiometrics = canCheckBiometrics;
+    });
+
+    if (_canCheckBiometrics) {
+      _authenticate();
+    } else {
+      // ⚠️ في حالة عدم توفر البصمة، ننتقل مباشرة حسب المسار المحدد
+      if (kDebugMode) print("Biometrics not available. Skipping authentication.");
+      _navigateAfterAuth(widget.nextRoute);
     }
   }
 
   Future<void> _authenticate() async {
-    if (mounted) {
-      setState(() {
-        _isProcessing = true;
-      });
-    }
-    // ✅ نطق طلب المصادقة (إذا كانت ميزة النطق متاحة)
-    _bleController.speak('auth_required_prompt'.tr);
-
-    // 💡 إضافة تأثير اهتزاز خفيف (Haptic Feedback)
-    await HapticFeedback.selectionClick();
-
-    final bool didAuthenticate = await _auth.authenticate(
-        localizedReason: 'auth_reason'.tr,
+    bool authenticated = false;
+    try {
+      setState(() => _isProcessing = true);
+      authenticated = await auth.authenticate(
+        localizedReason: 'local_auth_instruction'.tr,
         options: const AuthenticationOptions(
           stickyAuth: true,
-          // 💡 نستخدم false لتدعم رمز المرور (Passcode) كبديل للبيومتري
-          biometricOnly: false,
-        ));
+          biometricOnly: true,
+        ),
+      );
+      setState(() => _isProcessing = false);
 
-    if (mounted) {
-      setState(() {
-        _isProcessing = false;
-      });
-    }
-
-    if (didAuthenticate) {
-      // 🚀 النجاح: التنقل بناءً على nextRoute
-      _navigateToNextRoute(widget.nextRoute);
-    } else {
-      // 🛑 الفشل أو الإلغاء: تم توجيه المستخدم بطريقة خاطئة سابقاً.
-      _handleAuthFailure();
+      if (authenticated) {
+        _navigateAfterAuth(widget.nextRoute);
+      }
+    } on PlatformException catch (e) {
+      if (kDebugMode) print("Authentication error: $e");
+      setState(() => _isProcessing = false);
     }
   }
 
   // ----------------------------------------------------------------------
-  // ⚙️ Navigation Helpers
+  // 🗺️ منطق التنقل بعد المصادقة
   // ----------------------------------------------------------------------
 
-  void _navigateToNextRoute(AuthNextRoute nextRoute) {
-    if (nextRoute == AuthNextRoute.logoutConfirm) {
-      // حالة خاصة: لا تنتقل، بل قم بتنفيذ مهمة ثم أعد المستخدم للشاشة الرئيسية
-      _bleController.speak('logout_confirmed'.tr);
-      // 💡 هنا يجب وضع منطق تسجيل الخروج الفعلي
-      Get.offAll(() => const SignUpScreen());
-      return;
-    }
-
-    switch (nextRoute) {
+  void _navigateAfterAuth(AuthNextRoute route) async {
+    switch (route) {
       case AuthNextRoute.languageSelection:
+      // المسار الأولي للمستخدم الجديد: الانتقال إلى اختيار اللغة
         Get.offAll(() => const LanguageSelectionScreen());
         break;
-      case AuthNextRoute.mainScreen:
+
+      case AuthNextRoute.voiceSelection:
+      // الانتقال لاختيار الصوت بعد اختيار اللغة
+        Get.offAll(() => const ChooseVoiceScreen());
+        break;
+
+      case AuthNextRoute.signUp:
+      // ✅ التعديل الجديد: الانتقال إلى شاشة التسجيل
+        Get.offAll(() => const SignUpScreen());
+        break;
+
       case AuthNextRoute.profileConfirmation:
-      // ✅ المسار الصحيح: بعد المصادقة الناجحة، يذهب إلى MainChatScreen
+      // حفظ حالة إكمال الإعداد الأولي وتسجيل الدخول
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('has_run_setup', true);
+        await prefs.setBool('is_logged_in', true);
         Get.offAll(() => const MainChatScreen());
         break;
-      default:
-      // مسار احتياطي
-        Get.offAll(() => const MainChatScreen());
-    }
-  }
 
-  void _handleAuthFailure() {
-    // 🛑 FIX: بدلاً من العودة لشاشة التسجيل (SignUpScreen) في كل الحالات،
-    // نتحقق مما إذا كان الهدف هو الانتقال للشاشة الرئيسية بعد إكمال الملف الشخصي.
-    if (widget.nextRoute == AuthNextRoute.mainScreen || widget.nextRoute == AuthNextRoute.profileConfirmation) {
-      // ✅ إذا كان الهدف هو الشاشة الرئيسية (بعد حفظ الملف الطبي)،
-      // نذهب للشاشة الرئيسية لمنع إعادة المستخدم لبداية عملية التسجيل.
-      // 💡 يجب إضافة هذا النص 'auth_failure_proceeding_to_main_screen' في ملفات التعريب
-      _bleController.speak('auth_failure_proceeding_to_main_screen'.tr);
-      Get.offAll(() => const MainChatScreen());
-    } else {
-      // 🛑 للحالات الأخرى (مثل محاولة تسجيل الدخول الأولية)، يتم العودة لشاشة التسجيل.
-      // 💡 يجب إضافة هذا النص 'auth_failure_reverting_to_signup' في ملفات التعريب
-      _bleController.speak('auth_failure_reverting_to_signup'.tr);
-      Get.offAll(() => const SignUpScreen());
+      case AuthNextRoute.mainScreen:
+      // تسجيل دخول لحساب موجود
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('is_logged_in', true);
+        Get.offAll(() => const MainChatScreen());
+        break;
+
+      case AuthNextRoute.logoutConfirm:
+      // أمر تسجيل خروج مؤكد
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('is_logged_in', false);
+        // 📢 أمر TTS لتأكيد الخروج
+        _bleController.speak('logout_confirmed'.tr);
+        Get.offAll(() => const SignUpScreen());
+        break;
     }
   }
 
   // ----------------------------------------------------------------------
-  // 🎨 UI Build
+  // 🎨 واجهة المستخدم (UI) Build - لم يتم تعديلها
   // ----------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    return GetBuilder<BleController>(
-      init: _bleController,
-      builder: (bleController) {
-        // ... (كود الـ UI المتبقي)
-        return GestureDetector(
-          // ... (كود GestureDetector)
-          child: Container(
-            color: _screenBackground,
-            constraints: const BoxConstraints.expand(),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // شاشة المعالجة (التحميل المرئي الوحيد)
-                  if (_isProcessing)
-                    const Column(
-                      children: [
-                        CircularProgressIndicator(color: accentColor),
-                        SizedBox(height: 20),
-                        // ❌ تم إزالة نص 'loading_message'
-                      ],
-                    ),
-                ],
+    return Scaffold(
+      backgroundColor: _screenBackground,
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // 💡 مؤشر تحميل بسيط عند فحص توفر البصمة
+            if (_isProcessing)
+              const CircularProgressIndicator(color: accentColor),
+
+            const SizedBox(height: 20),
+
+            // 🔑 العنوان الرئيسي (Lumus Authentication)
+            Text(
+              'local_auth_title_new'.tr,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: accentColor,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
               ),
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 10),
+
+            // 🔑 رسالة الترحيب
+            Text(
+              'local_auth_welcome'.tr,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+              ),
+            ),
+            const SizedBox(height: 40),
+
+            // 🔒 أيقونة البصمة
+
+
+          ],
+        ),
+      ),
     );
   }
 }

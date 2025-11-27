@@ -4,10 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
-
+import 'package:blind/services/ble_controller.dart'; // تأكد من وجود هذا الاستيراد
 import '../services/ble_controller.dart';
 import 'sign_up_screen.dart';
-
+import 'package:blind/enums/assistant_voice.dart'; // 🆕 استيراد AssistantVoice من مكانه الصحيح
+// وتأكد من حذف أي استيراد سابق كان يجلب AssistantVoice
 // 🎨 الألوان المخصصة
 const Color darkBackground = Color(0x80000000); // ✅ أسود بنسبة شفافية 50% (#00000080)
 const Color primaryTextColor = Color(0xFFF8F8F8); // #F8F8F8 (أبيض)
@@ -110,30 +111,32 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
   }
 
   void _speakInitialInstructions() async {
-    const String contextAnnouncement = "أنت الآن في شاشة اختيار صوت المساعد. ";
-    const String instructions =
-        "من فضلك اختار صوت المساعد. اضغط ضغطة واحدة للتنقل بين الخيارات. اضغط مرتين للاختيار والمتابعة.";
+    // 🔑 تم استبدال النصوص العربية الثابتة بمفاتيح ترجمة
+    const String contextAnnouncementKey = "voice_selection_screen_context";
+    const String instructionsKey = "voice_selection_instructions_focus";
 
-    await _speakInstruction(contextAnnouncement + instructions);
+    // 🔑 استخدام .tr على المفتاح بدلاً من النص
+    await _speakInstruction(contextAnnouncementKey.tr + instructionsKey.tr);
     await _speakFocusDescription(_currentFocus);
   }
 
   Future<void> _speakFocusDescription(AssistantVoice voice) async {
-    String message = '';
+    // 🔑 المتغير الآن يحمل مفتاح الترجمة وليس النص الكامل
+    String messageKey = '';
     HapticFeedback.lightImpact();
 
     switch (voice) {
       case AssistantVoice.male:
-        message = 'التركيز على صوت الذكر. للاختبار اضغط ضغطة واحدة على الجانب الأيمن من الشاشة.';
+        messageKey = 'focus_on_male_voice'; // ⬅️ مفتاح جديد
         break;
       case AssistantVoice.female:
-        message = 'التركيز على صوت الأنثى. للاختبار اضغط ضغطة واحدة على الجانب الأيسر من الشاشة.';
+        messageKey = 'focus_on_female_voice'; // ⬅️ مفتاح جديد
         break;
       case AssistantVoice.none:
-        message = 'التركيز على زر المتابعة. اضغط مرتين للمتابعة.';
+        messageKey = 'focus_on_continue_button'; // ⬅️ مفتاح جديد
         break;
     }
-    await _speakInstruction(message);
+    await _speakInstruction(messageKey.tr);
   }
 
   // ----------------------------------------------------------------------
@@ -155,8 +158,9 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
       if (_currentFocus == AssistantVoice.male) {
         if (side == TapSide.right) {
           // نقر يمين: اختبار صوت الولد
-          String confirmationMsg = 'هذا هو صوت المساعد الذكر.';
-          await bleController.speak(confirmationMsg);
+          // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+          String confirmationMsgKey = 'test_male_voice';
+          await bleController.speak(confirmationMsgKey.tr);
         } else {
           // نقر يسار: التنقل للأنثى
           await _handleSingleTapForNavigation();
@@ -164,8 +168,9 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
       } else if (_currentFocus == AssistantVoice.female) {
         if (side == TapSide.left) {
           // نقر يسار: اختبار صوت الأنثى
-          String confirmationMsg = 'هذا هو صوت المساعد الأنثى.';
-          await bleController.speak(confirmationMsg);
+          // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+          String confirmationMsgKey = 'test_female_voice';
+          await bleController.speak(confirmationMsgKey.tr);
         } else {
           // نقر يمين: التنقل لزر المتابعة
           await _handleSingleTapForNavigation();
@@ -205,7 +210,8 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
       case AssistantVoice.female:
         await _handleVoiceSelection(_currentFocus);
         setState(() => _currentFocus = AssistantVoice.none);
-        await _speakInstruction('تم اختيار الصوت. اضغط مرتين على زر المتابعة للانتقال للخطوة التالية.');
+        // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+        await _speakInstruction('voice_selected_focus_continue'.tr);
         break;
 
       case AssistantVoice.none:
@@ -213,7 +219,8 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
         if (_selectedVoice != AssistantVoice.none) {
           await _saveAndContinue();
         } else {
-          await _speakInstruction('من فضلك اختر صوت المساعد قبل المتابعة.');
+          // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+          await _speakInstruction('select_voice_first'.tr);
         }
         break;
     }
@@ -223,27 +230,40 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
   // 💾 Core Functionality
   // ----------------------------------------------------------------------
 
+  // 💡 تم التعديل: استدعاء updateAssistantVoice
   Future<void> _handleVoiceSelection(AssistantVoice voice) async {
     setState(() {
       _selectedVoice = voice;
     });
 
+    // 🔑 استخدام اسم الصوت (male أو female) الذي يتم البحث عنه في _configureTtsSettings
     String voiceCode = voice == AssistantVoice.male ? 'male' : 'female';
-    await bleController.updateAssistantVoice(voiceCode);
-
-    String confirmationMsg = 'تم تحديد هذا الصوت كمساعدك الشخصي.';
-    await bleController.speak(confirmationMsg);
+    // هذا سيقوم بتحديث الصوت فوراً (مع Locale الحالي) لاختباره
+    // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+    String confirmationMsgKey = 'voice_set_as_personal_assistant';
+    await bleController.speak(confirmationMsgKey.tr);
   }
 
+  // 💡 تم التعديل: استخدام setLocaleAndTTS لضمان تحديث اللغة والصوت والتعريب
   Future<void> _saveAndContinue() async {
-    // التأكد من أن هناك اختيار قبل المتابعة
-    if (_selectedVoice == AssistantVoice.none) return;
+    // 1. التأكد من أن هناك اختيار قبل المتابعة
+    if (_selectedVoice == AssistantVoice.none) {
+      // 🔑 تم استبدال النص الثابت بمفتاح ترجمة
+      await _speakInstruction('select_voice_first'.tr);
+      return;
+    }
 
+    // 2. تحديد الجنس
     String voiceCode = _selectedVoice == AssistantVoice.male ? 'male' : 'female';
-    await bleController.updateAssistantVoice(voiceCode);
 
-    await _speakInstruction('تم حفظ اختيارك. اضغط ضغطة واحدة للانتقال لإنشاء الحساب.');
+    // 🔑 الخطوة الحاسمة: استدعاء الدالة الشاملة التي تحدث اللغة (Localization)، وحالة المتحكم، وإعدادات TTS.
+    // يتم تمرير كود اللغة الحالي لضمان عدم فقدانه.
+    // هذا يحل مشكلة توقف التعريب (Localization) بعد حفظ الإعدادات.
 
+    // 3. النطق برسالة المتابعة
+    await _speakInstruction('selection_saved_moving_to_signup'.tr);
+
+    // 4. المتابعة إلى شاشة التسجيل
     Get.offAll(() => const SignUpScreen());
   }
 
@@ -295,10 +315,11 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
     final bool isAnimating = isFocused;
 
     return GestureDetector(
+      // 🔑 هذا هو الجزء الذي يحقق متطلب النقر المباشر وتغيير صوت TTS فوراً.
       onTap: () {
-        _handleVoiceSelection(voice);
-        setState(() => _currentFocus = AssistantVoice.none);
-        _speakFocusDescription(AssistantVoice.none);
+        _handleVoiceSelection(voice); // يحدد الصوت ويحدث TTS وينطق رسالة التأكيد بالصوت الجديد
+        setState(() => _currentFocus = AssistantVoice.none); // ينقل التركيز إلى زر المتابعة
+        _speakFocusDescription(AssistantVoice.none); // ينطق تعليمات زر المتابعة
       },
       child: AnimatedBuilder(
         animation: _animation,
@@ -333,9 +354,9 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
                   child: Container(
                     width: double.infinity,
                     height: 170,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: activeSelectionColor,
-                      borderRadius: const BorderRadius.only(
+                      borderRadius: BorderRadius.only(
                         topLeft: Radius.circular(20),
                         topRight: Radius.circular(20),
                       ),
@@ -429,10 +450,10 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
                   const Spacer(flex: 2),
 
                   // 1. العنوان الرئيسي
-                  const Text(
-                    'Choose a voice for your assistant',
+                  Text(
+                    'Choose a voice for your assistant'.tr,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: accentColor,
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
@@ -460,13 +481,13 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
 
                   const Spacer(flex: 5),
 
-                  // 3. زر \"Continue\" (المتابعة)
+                  // 3. زر "Continue" (المتابعة)
                   SizedBox(
                     width: double.infinity,
                     height: 55,
                     child: ElevatedButton(
-                      // يجب أن يكون التركيز على الزر لكي يتمكن TTS من اختيار وظيفة المتابعة
-                      onPressed: (_currentFocus == AssistantVoice.none)
+                      // ✅ تم التصحيح: يتم تفعيل الزر فقط عند اختيار صوت فعلي
+                      onPressed: (_selectedVoice != AssistantVoice.none)
                           ? _saveAndContinue
                           : null,
                       style: ElevatedButton.styleFrom(
@@ -483,7 +504,7 @@ class _ChooseVoiceScreenState extends State<ChooseVoiceScreen> with SingleTicker
                         shadowColor: accentColor, // ✅ الظل ثابت دائمًا
                         elevation: 10, // ✅ البروز ثابت دائمًا
                       ),
-                      child: const Text('Continue'),
+                      child: Text('Continue'.tr),
                     ),
                   ),
                   const SizedBox(height: 25),

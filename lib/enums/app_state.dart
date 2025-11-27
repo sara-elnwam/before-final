@@ -1,7 +1,15 @@
+// lib/enums/app_state.dart
+
+/// حالات التطبيق التي تؤثر على طريقة معالجة الأوامر الصوتية.
 enum AppState {
-  idle,       // التطبيق خامل وجاهز
-  speaking,   // التطبيق يتحدث (TTS)
-  listeningForCommand, // يستمع لأمر صوتي عام
-  listeningForData,    // يستمع لإدخال بيانات (مثل الاسم)
-  listeningForLanguage // يستمع لاختيار لغة
+  /// الحالة الافتراضية: يستمع لأوامر عامة أو أسئلة لـ Gemini.
+  idle,
+  /// حالة الاستماع المخصصة: جاري اختيار اللغة (يتوقع "English" أو "العربية").
+  listeningForLanguage,
+  /// حالة الاستماع المخصصة: جاري اختيار الصوت (يتوقع "ذكر" أو "أنثى").
+  listeningForVoice,
+  /// حالة الاستماع المخصصة: جاري إكمال الملف الطبي (يتوقع "نعم" أو "لا" أو قيمة).
+  listeningForMedicalProfile,
+  /// حالة الاستماع المخصصة: جاري تأكيد تسجيل الخروج (يتوقع "نعم" أو "لا").
+  listeningForLogoutConfirmation,
 }

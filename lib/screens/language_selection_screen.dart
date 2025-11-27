@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
+import 'package:collection/collection.dart';
 
+// ✅ FIX: استيراد ChooseVoiceScreen وإخفاء AssistantVoice لتجنب تضارب النوع
+import 'package:blind/screens/voice_selection_screen.dart' hide AssistantVoice;
 import '../services/ble_controller.dart';
-import 'voice_selection_screen.dart';
 
-
+import 'package:blind/enums/assistant_voice.dart'; // ✅ هذا هو المصدر الصحيح
 // 🎨 الألوان المخصصة (المطابقة للديزاين والمقاسات المحدثة)
 const Color darkBackgroundPrimary = Color(0xFF292625);
 const Color darkBackgroundSecondary = Color(0xFF1B1818);
@@ -32,7 +34,7 @@ const LinearGradient backgroundGradient = LinearGradient(
 
 // 🆕 قائمة اللغات المدعومة
 const List<Map<String, String>> supportedLanguages = [
-  {'code': 'ar', 'name': 'Arabic', 'flag': '🇸🇦'},
+  {'code': 'ar', 'name': 'العربية', 'flag': '🇸🇦'},
   {'code': 'en', 'name': 'English', 'flag': '🇬🇧'},
 ];
 
@@ -53,9 +55,13 @@ class LanguageSelectionScreen extends StatefulWidget {
 }
 
 class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
-  late final BleController bleController;
+  // ✅ FIX: تهيئة المتحكم مباشرة لحل مشكلة LateInitializationError
+  final BleController bleController = Get.find<BleController>();
 
   String _selectedLanguageCode = 'en';
+  // 🔑 هذا المتغير يتم استخدامه فقط للعرض داخل البطاقات وفي بداية النطق
+  String _currentLanguageName = 'English';
+
   // 🔑 هذا المتغير يتحكم في إظهار بطاقات اللغات
   bool _isDropdownOpen = false;
 
@@ -73,22 +79,46 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    bleController = Get.find<BleController>();
 
-    _selectedLanguageCode = bleController.userProfile?.localeCode.split('-').first ??
-        Get.locale?.languageCode ??
+    // 1. تحديد كود اللغة الأولي (من البروفايل، أو لغة الجهاز، أو افتراضياً الإنجليزية)
+    // ✅ تحسين: استخدام Get.deviceLocale ليكون أكثر دقة في اكتشاف لغة الموبايل
+    String languageCode = bleController.userProfile?.localeCode.split('-').first ??
+        Get.deviceLocale?.languageCode ??
         'en';
 
-    // لضمان عرض اللغة الصحيحة
-    if(_selectedLanguageCode != 'ar') {
-      _selectedLanguageCode = 'en';
+    // 2. التحقق من الدعم وتعيين الكود
+    if (!supportedLanguages.any((l) => l['code'] == languageCode)) {
+      languageCode = 'en';
     }
+    _selectedLanguageCode = languageCode;
+
+    String fullLocaleCode = languageCode == 'ar' ? 'ar-SA' : 'en-US';
+
+    // 4. تعيين اسم اللغة الحالية للنطق (باستخدام الاسم المعرّب)
+    final lang = supportedLanguages.firstWhereOrNull(
+            (element) => element['code'] == _selectedLanguageCode);
+    // ستكون 'العربية' إذا كان موبايلك عربي
+    _currentLanguageName = lang?['name'] ?? 'English';
 
     bleController.stop();
 
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _speakInitialInstructions();
-    });
+    // 🔑 FIX: يجب وضع الاستدعاءات التي تسبب إعادة البناء (مثل تحديث الـ Locale)
+    // داخل WidgetsBinding.instance.addPostFrameCallback لتأخيرها
+    // حتى يكتمل بناء الإطار الحالي وتجنب خطأ setState() or markNeedsBuild().
+    WidgetsBinding.instance.addPostFrameCallback((_) { // 🔑 بداية التعديل
+      // 3. تحديث لغة GetX هنا لضمان أن النص (UI) يظهر بلغة الموبايل الصحيحة فوراً
+      // هذا هو الحل لمشكلة: "حتى الشاشة بتبقي مكتوبة انجلش وانا موبايلي عربي"
+      Get.updateLocale(Locale(languageCode, languageCode == 'ar' ? 'SA' : 'US'));
+
+      // 🔑 يجب تهيئة TTS/STT مباشرة هنا باستخدام اللغة المكتشفة
+      // هذا يضمن أن TTS/STT يعملان بلغة الموبايل الاصلية قبل نطق التعليمات الافتتاحية.
+      bleController.setLocaleAndTTS(fullLocaleCode, AssistantVoice.male);
+
+      // 5. نطق التعليمات بعد تأخير بسيط لضمان تهيئة TTS
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _speakInitialInstructions();
+      });
+    }); // 🔑 نهاية التعديل
   }
 
   @override
@@ -100,20 +130,30 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
 
   Future<void> _speakInstruction(String instruction) async {
     if (!mounted) return;
+    // 🔑 TTS يستخدم اللغة التي تم إعدادها في bleController.setLocaleAndTTS
     await bleController.speak(instruction);
   }
 
+  // 🔑 دالة النطق الافتتاحي الجديدة تستخدم مفاتيح الترجمة
   Future<void> _speakInitialInstructions() async {
-    // 🔑 رسالة التعليمات المتفق عليها: ضغطة للمتابعة (إذا لم يكن هناك رغبة في التغيير)، ضغطتين للتغيير
-    const String contextAnnouncement = "أنت الآن في شاشة اختيار اللغة. ";
-    const String instructions =
-        "للثبات على لغة موبايلك والمتابعة اضغط ضغطة واحدة على الشاشة. ولو عايز تغير اللغة اضغط ضغطتين لفتح قائمة اللغات.";
+    // 1. استخدام مفاتيح الترجمة للنطق الأولي (محتوى النطق سيتبع اللغة التي تم تعيينها في initState)
+    final String contextAnnouncement = 'lang_screen_context_announcement'.tr;
 
-    await _speakInstruction(contextAnnouncement + instructions);
+    // 2. الحصول على اسم اللغة التي سيتم الإعلان عنها في النطق (العربية أو English)
+    // نستخدم _currentLanguageName التي تم تعيينها بناءً على لغة الجهاز في initState
+    final String languageNameForSpeech = _currentLanguageName;
+
+    final String currentLangAnnouncement = 'lang_screen_current_language'.trArgs([languageNameForSpeech]);
+
+    final String instructions = 'lang_screen_initial_instructions'.tr;
+
+    // 3. نطق الجملة كاملة
+    // هذا يضمن نطق "العربية" أو "English" باللغة التي اكتشفها GetX.
+    await _speakInstruction(contextAnnouncement + currentLangAnnouncement + instructions);
   }
 
   // ----------------------------------------------------------------------
-  // 👆 Tap Handling Logic (تم تعديل _handleSingleTap ليتوافق مع التصميم الجديد)
+  // 👆 Tap Handling Logic
   // ----------------------------------------------------------------------
 
   void _handleScreenTap() {
@@ -138,7 +178,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     }
   }
 
-  // 🔑 تم تعديل هذا الجزء للتعامل مع منطق "الثبات والمتابعة" والتعامل مع حالات القائمة.
+  // 🔑 ضغطة واحدة: (1) تأكيد صوتي (2) متابعة (3) بدء دورة اللغات
   void _handleSingleTap() {
     if (_currentPhase == InteractionPhase.awaitingVoiceConfirmation) {
       // 1. تأكيد الأمر الصوتي
@@ -146,22 +186,20 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
       _processVoiceCommand(_recognizedCommand);
     }
 
-    // 2. إذا كانت القائمة مغلقة (الحالة الافتتاحية)
+    // 2. إذا كانت القائمة مغلقة (الحالة الافتتاحية: ضغطة واحدة للثبات والمتابعة)
     else if (_currentPhase == InteractionPhase.initial && !_isDropdownOpen) {
-      // 🔑 الثبات على اللغة الحالية والمتابعة، كما هو مطلوب في الاتفاق الأصلي.
+      // 🔑 الثبات على اللغة الحالية والمتابعة، وهذا هو الخيار الافتراضي للغة الموبايل
       _saveAndContinue(_selectedLanguageCode);
     }
 
-    // 3. إذا كانت القائمة مفتوحة (الحالة awaitingChoice)
+    // 3. إذا كانت القائمة مفتوحة (الحالة awaitingChoice: ضغطة واحدة لبدء دورة اللغات)
     else if (_currentPhase == InteractionPhase.awaitingChoice) {
-      // 🔑 ضغطة واحدة والقائمة مفتوحة: تبدأ دورة التنقل (cycling)
       HapticFeedback.mediumImpact();
       _startLanguageCycle();
     }
 
-    // 4. إذا كانت في وضع الاستعراض (cycling)
+    // 4. إذا كانت في وضع الاستعراض (cycling: ضغطة واحدة لإيقاف الدورة)
     else if (_currentPhase == InteractionPhase.cycling) {
-      // 🔑 ضغطة واحدة خلال الدورة: توقف الدورة
       _stopLanguageCycleAndSpeakInstruction();
     }
   }
@@ -173,6 +211,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
       _currentPhase = InteractionPhase.awaitingChoice;
       _languageIndex = -1;
     });
+    // 🔑 رسالة النطق المطلوبة بعد التوقف:
     _speakInstruction("تم إيقاف استعراض اللغات. يمكنك الضغط مرتين لاختيار اللغة الحالية أو ضغطة واحدة لاستئناف الاستعراض.");
   }
 
@@ -187,6 +226,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
         _isDropdownOpen = false;
         _currentPhase = InteractionPhase.initial;
         _languageCycleTimer?.cancel();
+        _languageIndex = -1; // إعادة تعيين مؤشر الدورة
       });
       _speakInstruction("تم إغلاق قائمة اللغات. اضغط ضغطتين لفتحها.");
     } else {
@@ -201,7 +241,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     HapticFeedback.mediumImpact();
   }
 
-  // 🔑 تم تعديل _handleDoubleTap لفتح/غلق القائمة.
+  // 🔑 ضغطتين: (1) فتح/غلق القائمة (2) اختيار اللغة والمتابعة
   void _handleDoubleTap() {
     if (_currentPhase == InteractionPhase.initial) {
       // 🔑 الضغط المزدوج يفتح القائمة (لتغيير اللغة)
@@ -219,7 +259,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
   }
 
   // ----------------------------------------------------------------------
-  // 🔊 منطق الأوامر الصوتية (Long Press) (لم يتغير)
+  // 🔊 منطق الأوامر الصوتية (Long Press)
   // ----------------------------------------------------------------------
 
   void _handleLongPressStart(LongPressStartDetails details) {
@@ -229,6 +269,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     bleController.stop();
     HapticFeedback.vibrate();
 
+    // 🔑 رسالة بدء الاستماع المطلوبة:
     _speakInstruction('stt_listening_tts'.tr);
 
     // 🔑 استخدام دالة STT الموثوقة من bleController
@@ -267,16 +308,19 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     String? selectedCode;
 
     // 1. محاولة معالجة أمر اختيار اللغة أولاً
-    if (lowerResult.contains('عربي') || lowerResult.contains('arabic')) {
+    // 🔑 يجب أن يتعرف على "العربية" أو "الانجليزية"
+    if (lowerResult.contains('عربي') || lowerResult.contains('العربية') || lowerResult.contains('arabic')) {
       selectedCode = 'ar';
-    } else if (lowerResult.contains('إنجليزي') || lowerResult.contains('english')) {
+    } else if (lowerResult.contains('إنجليزي') || lowerResult.contains('الانجليزية') || lowerResult.contains('english')) {
       selectedCode = 'en';
     }
 
     if (selectedCode != null) {
       // 🔑 تحديث _selectedLanguageCode قبل المتابعة
       _selectedLanguageCode = selectedCode;
-      await bleController.speak('language_confirmed_tts'.trArgs([supportedLanguages.firstWhere((l) => l['code'] == selectedCode)['name']!]));
+      final langName = supportedLanguages.firstWhere((l) => l['code'] == selectedCode)['name']!;
+      // 🔑 استخدام مفتاح الترجمة الجديد هنا
+      await bleController.speak('language_confirmed_tts'.trArgs([langName]));
       _saveAndContinue(selectedCode);
     }
     // 2. أمر تنقل عالمي
@@ -305,7 +349,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
   }
 
   // ----------------------------------------------------------------------
-  // 🔄 منطق دورة استعراض اللغات (Cycling) (لم يتغير)
+  // 🔄 منطق دورة استعراض اللغات (Cycling)
   // ----------------------------------------------------------------------
 
   void _startLanguageCycle() {
@@ -313,7 +357,8 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
       _currentPhase = InteractionPhase.cycling;
     });
 
-    _speakInstruction('starting_language_cycle_tts'.tr);
+    // 🔑 رسالة بدء الدورة المطلوبة
+    _speakInstruction('بدء استعراض اللغات. اضغط ضغطة واحدة للانتقال للغة التالية، أو ضغطتين للاختيار.');
 
     _languageCycleTimer?.cancel();
 
@@ -336,15 +381,18 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
 
     String message;
     if (langCode == 'ar') {
-      message = 'arabic_select_tts'.tr;
+      // 🔑 رسالة الدورة المطلوبة
+      message = 'العربية، اضغط ضغطتين للاختيار.';
     } else {
-      message = 'english_select_tts'.tr;
+      // 🔑 رسالة الدورة المطلوبة
+      message = 'English، اضغط ضغطتين للاختيار.';
     }
 
     bleController.speak(message);
     HapticFeedback.vibrate();
   }
 
+  // 💡 دالة الحفظ والمتابعة (المسؤولة عن تغيير لغة التطبيق بالكامل)
   void _saveAndContinue(String languageCode) async {
     _tapResetTimer?.cancel();
     _languageCycleTimer?.cancel();
@@ -352,25 +400,32 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     setState(() => _currentPhase = InteractionPhase.processing);
     HapticFeedback.heavyImpact();
 
+    // 🔑 1. تعيين الـ Locale والـ TTS/STT. هذا يغير لغة التطبيق بالكامل
     String fullLocaleCode = languageCode == 'ar' ? 'ar-SA' : 'en-US';
-    Locale finalLocale = Locale(languageCode, languageCode == 'ar' ? 'SA' : 'US');
+    // 🔑 هذا يضبط محركات TTS/STT على اللغة الجديدة
+    // ✅ FIX: يجب تحديث GetX Locale أيضًا هنا لضمان أن الواجهة (UI) في الشاشات التالية تتغير
+    Get.updateLocale(Locale(languageCode, languageCode == 'ar' ? 'SA' : 'US'));
 
-    await bleController.setLocaleAndTTS(finalLocale.toLanguageTag(), fullLocaleCode);
+    // 🔑 هذا السطر مفقود ويجب إضافته لتحديث TTS/STT على اللغة الجديدة
+    await bleController.setLocaleAndTTS(fullLocaleCode, AssistantVoice.male);
+
+    // 🔑 2. النطق للتأكيد (سيستخدم اللغة الجديدة بعد تحديثها)
+    // 🔑 استخدام مفتاح الترجمة للتأكيد
     await _speakInstruction('language_selection_complete_tts'.tr);
 
-    Get.offAll(() => const ChooseVoiceScreen());
-  }
+    // 🔑 3. الانتقال للشاشة التالية
+    Get.offAll(() => const ChooseVoiceScreen());  }
 
 
-  // ----------------------------------------------------------------------
-  // 🎨 UI Builders (المُعدّل لمطابقة تصميم Figma)
-  // ----------------------------------------------------------------------
+  //
+  // 🎨 UI Builders
+  //
 
   // 🔑 البناء الجديد لزر القائمة المنسدلة "Select Language"
   Widget _buildDropdownButton() {
 
     // 💡 النص الحالي الذي يظهر داخل الزر
-    final String displayText = 'Select Language'; // النص ثابت في هذا الزر
+    final String displayText = 'select_language'.tr; // 🔑 استخدام مفتاح الترجمة
 
     // 💡 تحديد لون الحدود
     final Color borderColor = _isDropdownOpen ? accentColor : Colors.transparent;
@@ -380,7 +435,8 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
 
 
     return InkWell(
-      onTap: _toggleDropdown, // ضغطة واحدة تفتح/تغلق القائمة
+      // 🔑 ربط ضغطة مرئية على الزر بمنطق الضغط المزدوج (لفتح/غلق القائمة)
+      onTap: _toggleDropdown,
       borderRadius: BorderRadius.circular(10),
       child: Container(
         height: 55, // ارتفاع ثابت 55px
@@ -396,9 +452,9 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
         child: Row(
           children: [
             // 🔑 النص
-            Text(
+            Text( // 🔑 تم استخدام متغير الترجمة
               displayText,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w500,
                 // 🔑 اللون: #757575
@@ -454,20 +510,25 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
             borderRadius: BorderRadius.circular(10),
             // 💡 عند النقر المزدوج على بطاقة اللغة: نختارها ونتابع
             onDoubleTap: () {
+              // 🔑 الضغط المزدوج المرئي يساوي الاختيار والمتابعة
               _saveAndContinue(languageCode);
             },
             // 💡 عند النقر العادي: نغير اللغة المختارة وننطقها
             onTap: () {
               if (_currentPhase != InteractionPhase.processing) {
+                // 🔑 عند النقر على البطاقة، نوقف الدورة ونثبت على اللغة
+                if (_currentPhase == InteractionPhase.cycling) {
+                  _languageCycleTimer?.cancel();
+                }
+
                 setState(() {
                   _selectedLanguageCode = languageCode;
-                  // عند النقر، ننتقل إلى حالة awaitingChoice
+                  // العودة إلى awaitingChoice بعد الاختيار المرئي
                   _currentPhase = InteractionPhase.awaitingChoice;
-                  _languageCycleTimer?.cancel();
                   _languageIndex = -1;
                 });
                 HapticFeedback.lightImpact();
-                _speakInstruction(languageName);
+                _speakInstruction('تم اختيار $languageName. اضغط ضغطتين للمتابعة.');
               }
             },
             child: Padding(
@@ -488,7 +549,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                   const Spacer(),
                   // 🔑 السهم (مؤشر التحديد)
                   if (isFocused)
-                    Icon(
+                    const Icon(
                       Icons.arrow_forward_ios,
                       color: accentColor,
                       size: 20,
@@ -507,6 +568,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
     final String currentLangCode = _selectedLanguageCode;
 
     return GestureDetector(
+      // 🔑 ربط منطق النقر الموحد بالـ GestureDetector
       onTap: _handleScreenTap,
       onLongPressStart: _handleLongPressStart,
       onLongPressEnd: _handleLongPressEnd,
@@ -524,9 +586,9 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                   const SizedBox(height: 50),
 
                   // 1. العنوان الرئيسي
-                  const Text(
-                    'Choose the language',
-                    style: TextStyle(
+                  Text( // 🔑 استخدام مفتاح الترجمة
+                    'choose_language_title'.tr,
+                    style: const TextStyle(
                       color: accentColor,
                       fontSize: 32,
                       fontWeight: FontWeight.w700,
@@ -534,9 +596,9 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                   ),
                   const SizedBox(height: 8),
 
-                  // 2. رسائل الشرح
-                  Text(
-                    'Select your preferred language below',
+                  // 2. رسالة الشرح
+                  Text( // 🔑 استخدام مفتاح الترجمة
+                    'choose_language_description'.tr,
                     style: const TextStyle(
                       // 🔑 تطبيق اللون #757575
                       color: secondaryTextColor,
@@ -544,16 +606,6 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                       fontWeight: FontWeight.w500,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'This helps us serve you better.',
-                    style: const TextStyle(
-                      // 🔑 تطبيق اللون #757575
-                      color: secondaryTextColor,
-                      fontSize: 16,
-                    ),
-                  ),
-
                   const SizedBox(height: 40),
 
                   // 3. زر القائمة المنسدلة "Select Language"
@@ -565,10 +617,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                       padding: const EdgeInsets.only(top: 10.0),
                       child: Column(
                         children: supportedLanguages.map((lang) {
-                          // 🔑 تحديد ما إذا كانت اللغة هي اللغة التي يتم استعراضها حالياً في وضع cycling
-                          final isCycling = _currentPhase == InteractionPhase.cycling && supportedLanguages.indexOf(lang) == _languageIndex;
-
-                          // 🔑 نستخدم اللغة المختارة _selectedLanguageCode أو لغة الدورة isCycling كحالة تركيز
+                          // 🔑 نستخدم اللغة المختارة _selectedLanguageCode لحالة التركيز
                           return _buildLanguageOption(
                             languageCode: lang['code']!,
                             languageName: lang['name']!,
@@ -601,7 +650,8 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                         ),
                         elevation: _currentPhase != InteractionPhase.processing ? 5 : 2,
                       ),
-                      child: Text(_currentPhase == InteractionPhase.processing ? 'Loading...' : 'Continue'),
+                      // 🔑 استخدام مفاتيح الترجمة
+                      child: Text(_currentPhase == InteractionPhase.processing ? 'loading_message'.tr : 'continue_button'.tr),
                     ),
                   ),
                   const SizedBox(height: 25),
